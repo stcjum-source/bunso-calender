@@ -215,7 +215,12 @@ $('#loginForm')?.addEventListener('submit',async e=>{
  e.preventDefault();const email=$('#loginEmail').value.trim(),pw=$('#loginPw').value,msg=$('#loginMsg'),btn=$('#loginSubmit');
  msg.className='';msg.textContent='로그인 중…';btn.disabled=true;
  try{const {data,error}=await sb.auth.signInWithPassword({email,password:pw});if(error)throw error;authUser=data.user;$('#loginPw').value='';msg.textContent='';await afterLogin();}
- catch(err){msg.className='';msg.textContent='로그인 실패: 이메일/비밀번호를 확인하세요.';}
+ catch(err){msg.className='';const raw=(err&&err.message)||String(err);let hint=raw;
+  if(/invalid login credentials/i.test(raw))hint='이메일/비밀번호가 틀렸거나 그 사용자가 없습니다. (Supabase → Authentication → Users 에서 계정 생성 확인)';
+  else if(/email not confirmed/i.test(raw))hint='이메일 인증이 안 된 계정입니다. Supabase → Authentication → Users 에서 그 사용자를 열어 Confirm(확인) 처리하거나, 새로 만들 때 "Auto Confirm User"를 체크하세요.';
+  else if(/failed to fetch|networkerror|load failed/i.test(raw))hint='서버에 연결하지 못했습니다. config.js의 SUPABASE_URL 오타이거나 값을 넣고 다시 커밋하지 않았을 수 있습니다. (URL은 https://xxxx.supabase.co 형태)';
+  else if(/invalid api key|jwt|apikey/i.test(raw))hint='API 키가 올바르지 않습니다. config.js의 SUPABASE_ANON_KEY를 anon/publishable 키로 다시 확인하세요. (service_role 아님)';
+  msg.textContent='로그인 실패: '+hint;}
  finally{btn.disabled=false;}
 });
 $('#lockBtn')?.addEventListener('click',()=>{if(cloudEnabled&&authUser)doLogout();});
