@@ -11,7 +11,7 @@ body.web[data-mode="icon"] #app { display: block; }
 /* 상단바: 잠금 버튼 자리 */
 body.web .windowcontrols { gap: 6px; }
 #lockBtn { display: none; }
-body.web.cloud #lockBtn { display: inline-flex; align-items: center; gap: 4px; border-radius: 8px; padding: 4px 10px; font-size: 13px; }
+body.cloud #lockBtn { display: inline-flex; align-items: center; gap: 4px; border-radius: 8px; padding: 4px 10px; font-size: 13px; }
 
 /* 폰 화면 대응 */
 @media (max-width: 560px) {
