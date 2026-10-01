@@ -5,14 +5,14 @@ const isDesktop=!!window.desktop;
 const cloudEnabled=!!(CFG.SUPABASE_URL&&CFG.SUPABASE_ANON_KEY&&window.supabase);
 if(cloudEnabled)try{document.body.classList.add('cloud');}catch(e){}
 const sb=cloudEnabled?window.supabase.createClient(CFG.SUPABASE_URL,CFG.SUPABASE_ANON_KEY,{auth:{persistSession:true,autoRefreshToken:true}}):null;
-let authUser=null,lastSyncJson=null;
+let authUser=null,lastSyncJson=null,cloudReady=false; // cloudReady: 클라우드 자료를 다 받기 전엔 절대 저장 안 함
 const local={getItem:k=>{try{return localStorage.getItem(k)}catch{return null}},setItem:(k,v)=>{try{localStorage.setItem(k,v)}catch{}}};
 const storage={getItem:k=>isDesktop?window.desktop.readState():local.getItem(k),setItem:(k,v)=>isDesktop?window.desktop.writeState(v):local.setItem(k,v)};
 const STORAGE='bunso-calendar-v1';let state,view=month(today()),editId=null,selected=null,readFailure=false;
 function freshState(){return {version:1,created:today(),rules:defaults(),items:{},holidays:{}};}
 state=freshState();
 function toast(s){$('#toast').textContent=s;$('#toast').hidden=false;clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('#toast').hidden=true,4000);}
-function save(){if(readFailure){$('#notice').textContent='저장 자료를 읽지 못했습니다. 기존 자료 보호를 위해 저장을 중지했습니다. 관리에서 백업을 불러오세요.';return false;}const json=JSON.stringify(state);if(cloudEnabled){local.setItem(STORAGE,json);if(authUser&&json!==lastSyncJson)queueCloudSave(json);return true;}try{storage.setItem(STORAGE,json);$('#saved').textContent=isDesktop?'이 PC에 저장됨':'이 기기에 저장됨';return true;}catch{$('#notice').textContent='저장하지 못했습니다. 관리 → 백업 저장으로 자료를 보관하세요.';return false;}}
+function save(){if(readFailure){$('#notice').textContent='저장 자료를 읽지 못했습니다. 기존 자료 보호를 위해 저장을 중지했습니다. 관리에서 백업을 불러오세요.';return false;}const json=JSON.stringify(state);if(cloudEnabled){if(!cloudReady)return true;local.setItem(STORAGE,json);if(authUser&&json!==lastSyncJson)queueCloudSave(json);return true;}try{storage.setItem(STORAGE,json);$('#saved').textContent=isDesktop?'이 PC에 저장됨':'이 기기에 저장됨';return true;}catch{$('#notice').textContent='저장하지 못했습니다. 관리 → 백업 저장으로 자료를 보관하세요.';return false;}}
 function confirmAction(text){$('#confirmText').textContent=text;$('#confirm').showModal();return new Promise(resolve=>$('#confirm').addEventListener('close',()=>resolve($('#confirm').returnValue==='yes'),{once:true}));}
 function allVisible(){return projected(state,view);}
 let draggedItem=null,moveItem=null,pickedItem=null;
@@ -193,7 +193,21 @@ function pickItem(x,y){
 }
 function mergeItems(a={},b={}){const out={};for(const id of new Set([...Object.keys(a),...Object.keys(b)])){const x=a[id],y=b[id];out[id]=(x&&y)?pickItem(x,y):(x||y);}return out;}
 function mergeRules(a=[],b=[]){const m=new Map();for(const r of b)m.set(r.id,r);for(const r of a)m.set(r.id,r);return [...m.values()];}
-function mergeState(a,b){if(!a)return b;if(!b)return a;return {version:1,created:a.created||b.created||today(),rules:mergeRules(a.rules,b.rules),items:mergeItems(a.items,b.items),holidays:{...(b.holidays||{}),...(a.holidays||{})}};}
+// 같은 업무(이름+반복설정 동일)가 다른 번호로 중복되면 하나로 합침. 완료 기록은 남는 쪽으로 옮김.
+function ruleSig(r){return [String(r.title||'').trim(),r.repeat,r.start,r.weekday,(r.nths||[]).join(','),r.annualMonth,r.repeat==='once'?r.once:'',r.repeat==='biweekly'?r.from:''].join('|');}
+function dedupeState(s){
+ if(!s||!Array.isArray(s.rules))return s;
+ const keep=new Map(),remap={},rules=[];
+ for(const r of s.rules){const k=ruleSig(r);if(keep.has(k)){remap[r.id]=keep.get(k).id;if(r.active&&!keep.get(k).active)keep.get(k).active=true;}else{keep.set(k,r);rules.push(r);}}
+ if(!Object.keys(remap).length)return s;
+ const items={};
+ for(const o of Object.values(s.items||{})){
+  let v=o;if(remap[o.ruleId]){const rid=remap[o.ruleId];v={...o,ruleId:rid,id:rid+':'+o.original};}
+  items[v.id]=items[v.id]?pickItem(items[v.id],v):v;
+ }
+ return {...s,rules,items};
+}
+function mergeState(a,b){if(!a)return dedupeState(b);if(!b)return dedupeState(a);return dedupeState({version:1,created:b.created||a.created||today(),rules:mergeRules(a.rules,b.rules),items:mergeItems(a.items,b.items),holidays:{...(b.holidays||{}),...(a.holidays||{})}});}
 async function fetchRemote(){try{const {data,error}=await sb.from('calendar_state').select('data').eq('user_id',authUser.id).maybeSingle();if(error)return null;return (data&&data.data&&validState(data.data))?data.data:null;}catch{return null;}}
 let saveTimer=null,pendingJson=null,saving=false;
 function queueCloudSave(json){pendingJson=json;$('#saved').textContent='저장 중…';clearTimeout(saveTimer);saveTimer=setTimeout(flushCloud,800);}
@@ -215,30 +229,30 @@ async function cloudLoad(){
  const remote=await fetchRemote();
  let cached=null;const raw=local.getItem(STORAGE);try{if(raw){const c=JSON.parse(raw);if(validState(c))cached=c;}}catch{}
  if(remote&&cached)state=mergeState(cached,remote);
- else state=remote||cached||freshState();
- lastSyncJson=JSON.stringify(state);local.setItem(STORAGE,lastSyncJson);
+ else state=dedupeState(remote||cached||freshState());
+ lastSyncJson=JSON.stringify(state);local.setItem(STORAGE,lastSyncJson);cloudReady=true;
  if(!remote||JSON.stringify(remote)!==lastSyncJson){try{await sb.from('calendar_state').upsert({user_id:authUser.id,data:state,updated_at:new Date().toISOString()});}catch{}}
 }
 async function refreshFromCloud(){
- if(!authUser||saving||pendingJson!=null)return;
+ if(!authUser||!cloudReady||saving||pendingJson!=null)return;
  try{const remote=await fetchRemote();if(!remote)return;
  const merged=mergeState(state,remote);const json=JSON.stringify(merged);
  if(json!==lastSyncJson){state=merged;lastSyncJson=json;local.setItem(STORAGE,json);render();if(JSON.stringify(remote)!==json)queueCloudSave(json);}}catch{}
 }
 function showLogin(){$('#login').hidden=false;document.body.classList.add('locked');setTimeout(()=>$('#loginEmail')?.focus(),50);}
 function hideLogin(){$('#login').hidden=true;document.body.classList.remove('locked');}
-async function doLogout(){try{await sb.auth.signOut();}catch{}authUser=null;lastSyncJson=null;location.reload();}
+async function doLogout(){try{await sb.auth.signOut();}catch{}authUser=null;lastSyncJson=null;cloudReady=false;location.reload();}
 let realtimeSub=null;
 function subscribeRealtime(){
  if(!cloudEnabled||!authUser||realtimeSub)return;
  try{realtimeSub=sb.channel('cal-'+authUser.id)
   .on('postgres_changes',{event:'*',schema:'public',table:'calendar_state',filter:'user_id=eq.'+authUser.id},payload=>{
    const d=payload.new&&payload.new.data;
-   if(d&&validState(d)){const merged=mergeState(state,d);const json=JSON.stringify(merged);if(json!==lastSyncJson){state=merged;lastSyncJson=json;local.setItem(STORAGE,json);render();$('#saved').textContent='다른 기기 변경 반영됨 ✓';if(JSON.stringify(d)!==json)queueCloudSave(json);}}
+   if(cloudReady&&d&&validState(d)){const merged=mergeState(state,d);const json=JSON.stringify(merged);if(json!==lastSyncJson){state=merged;lastSyncJson=json;local.setItem(STORAGE,json);render();$('#saved').textContent='다른 기기 변경 반영됨 ✓';if(JSON.stringify(d)!==json)queueCloudSave(json);}}
   }).subscribe();}catch(e){}
 }
 async function afterLogin(){
- try{await cloudLoad();}catch(e){const raw=local.getItem(STORAGE);if(raw){try{const s=JSON.parse(raw);if(validState(s)){state=s;lastSyncJson=raw;}}catch{}}$('#saved').textContent='⚠ 클라우드 연결 실패 · 이 기기 자료로 표시';}
+ try{await cloudLoad();}catch(e){const raw=local.getItem(STORAGE);if(raw){try{const s=JSON.parse(raw);if(validState(s)){state=s;lastSyncJson=raw;cloudReady=true;}}catch{}}$('#saved').textContent=cloudReady?'⚠ 클라우드 연결 실패 · 이 기기 자료로 표시':'⚠ 클라우드 연결 실패 · 저장 보류(새로고침 해주세요)';}
  hideLogin();startApp();resetLockTimer();subscribeRealtime();
 }
 function startApp(){if(!isDesktop)document.body.dataset.mode='month';render();}
