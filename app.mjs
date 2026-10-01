@@ -194,12 +194,25 @@ function pickItem(x,y){
 function mergeItems(a={},b={}){const out={};for(const id of new Set([...Object.keys(a),...Object.keys(b)])){const x=a[id],y=b[id];out[id]=(x&&y)?pickItem(x,y):(x||y);}return out;}
 function mergeRules(a=[],b=[]){const m=new Map();for(const r of b)m.set(r.id,r);for(const r of a)m.set(r.id,r);return [...m.values()];}
 // 같은 업무(이름+반복설정 동일)가 다른 번호로 중복되면 하나로 합침. 완료 기록은 남는 쪽으로 옮김.
-function ruleSig(r){return [String(r.title||'').trim(),r.repeat,r.start,r.weekday,(r.nths||[]).join(','),r.annualMonth,r.repeat==='once'?r.once:'',r.repeat==='biweekly'?r.from:''].join('|');}
+// 반복 방식별로 "실제로 쓰는 설정"만 비교 (수정 저장 시 함께 저장되는 안 쓰는 값은 무시)
+function ruleSig(r){const t=String(r.title||'').trim(),n=v=>v==null||v===''?'':String(+v);
+ switch(r.repeat){
+  case 'monthly':case 'quarterly':return [t,r.repeat,String(r.start)].join('|');
+  case 'yearly':return [t,'yearly',n(r.annualMonth),String(r.start)].join('|');
+  case 'nth':return [t,'nth',(r.nths||[]).map(Number).join(','),n(r.weekday)].join('|');
+  case 'weekly':return [t,'weekly',n(r.weekday)].join('|');
+  case 'biweekly':return [t,'biweekly',n(r.weekday),r.from||''].join('|');
+  case 'once':return [t,'once',r.once||''].join('|');
+  default:return [t,r.repeat,r.id].join('|');}}
+// 중복 중 남길 쪽: 사용자가 수정한 적 있는 것 > 더 오래전에 만든 것(=원래 자료) > 메모 긴 것. 중지/활성 상태도 남기는 쪽 그대로.
+function betterRule(x,y){const ex=x.once!==undefined,ey=y.once!==undefined;if(ex!==ey)return ex?x:y;if((x.from||'')!==(y.from||''))return (x.from||'')<(y.from||'')?x:y;return (x.note||'').length>=(y.note||'').length?x:y;}
 function dedupeState(s){
  if(!s||!Array.isArray(s.rules))return s;
- const keep=new Map(),remap={},rules=[];
- for(const r of s.rules){const k=ruleSig(r);if(keep.has(k)){remap[r.id]=keep.get(k).id;if(r.active&&!keep.get(k).active)keep.get(k).active=true;}else{keep.set(k,r);rules.push(r);}}
+ const groups=new Map();for(const r of s.rules){const k=ruleSig(r);groups.has(k)?groups.get(k).push(r):groups.set(k,[r]);}
+ const win=new Map(),remap={};
+ for(const [k,g] of groups){const w=g.reduce(betterRule);win.set(k,w);for(const r of g)if(r.id!==w.id)remap[r.id]=w.id;}
  if(!Object.keys(remap).length)return s;
+ const rules=[],seen=new Set();for(const r of s.rules){const k=ruleSig(r);if(!seen.has(k)){seen.add(k);rules.push(win.get(k));}}
  const items={};
  for(const o of Object.values(s.items||{})){
   let v=o;if(remap[o.ruleId]){const rid=remap[o.ruleId];v={...o,ruleId:rid,id:rid+':'+o.original};}
