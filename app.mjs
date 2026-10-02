@@ -1,4 +1,4 @@
-import {key,date,today,month,uid,holiday,defaults,sync,projected,status,displayDate,occurrences,validState,plannedDate,calendarEntries,setCompletion,moveOccurrence} from './engine.mjs?v=0.5.0';
+import {key,date,today,month,uid,holiday,defaults,sync,projected,status,displayDate,occurrences,validState,plannedDate,calendarEntries,setCompletion,moveOccurrence} from './engine.mjs?v=0.5.1';
 const $=s=>document.querySelector(s), el=(tag,cls,text)=>{const e=document.createElement(tag);if(cls)e.className=cls;if(text!==undefined)e.textContent=text;return e;};
 const CFG=window.BUNSO_CONFIG||{};
 const isDesktop=!!window.desktop;
@@ -114,6 +114,12 @@ function render(){
 const nextMonthStart=ym=>{const d=date(ym+'-01');d.setMonth(d.getMonth()+1);return key(d);};
 function regen(drop){const now=Date.now(),gone={};for(const [id,o] of Object.entries(state.items))if(drop(o)){gone[id]=o;delete state.items[id];}sync(state);for(const [id,o] of Object.entries(gone)){if(state.items[id])state.items[id].updated=now;else if(o.updated)state.items[id]={...o,deleted:true,updated:now,auto:true};}}
 function notReady(){if(cloudEnabled&&!cloudReady){toast('클라우드 자료를 불러온 뒤에 저장할 수 있습니다. 잠시 후 다시 시도해 주세요.');return true;}return false;}
+async function deleteRule(r){
+ if(notReady())return;
+ if(!await confirmAction(`'${r.title}' 업무를 삭제할까요?\n지난 완료 기록은 남고, 앞으로의 일정과 아직 안 한 회차는 사라집니다.`))return;
+ const now=Date.now();r.deleted=true;r.active=false;r.updated=now;   // 삭제 표시(다른 기기에서 되살아나지 않게)
+ for(const [id,o] of Object.entries(state.items))if(o.ruleId===r.id&&!o.done&&!o.deleted&&!['missed','excluded'].includes(status(o)))state.items[id]={...o,deleted:true,updated:now};
+ render();renderRules();toast('업무를 삭제했습니다. 지난 완료 기록은 남아 있습니다.');}
 function keep(o){if(!state.items[o.id])state.items[o.id]=structuredClone(o);return state.items[o.id];}
 function toggle(o){const v=keep(o);if(v.done)v.done=null;else setCompletion(v,today());v.updated=Date.now();render();toast(v.done?`${shortDate(v.done)} 완료로 기록했습니다.`:'완료 표시를 취소했습니다.');}
 function changeMonth(n){closeDay();let d=date(view+'-01');d.setMonth(d.getMonth()+n);view=month(key(d));render();}
@@ -123,14 +129,14 @@ document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>document.getE
 const form=$('#ruleForm'),f=n=>form.elements.namedItem(n);for(let i=1;i<=31;i++){f('start').add(new Option(i+'일',String(i)));f('deadline').add(new Option(i+'일',String(i)));}f('start').add(new Option('말일','last'));f('deadline').add(new Option('말일','last'));f('deadline').add(new Option('실시 당일','same'));for(let i=1;i<=12;i++)f('annualMonth').add(new Option(i+'월',String(i)));
 function formVisibility(){const repeat=f('repeat').value,hide=(sel,v)=>{const e=$(sel);if(e)e.hidden=v;};hide('#nthFields',!['nth','weekly','biweekly'].includes(repeat));hide('#ordinalField',repeat!=='nth');hide('#annualField',repeat!=='yearly');hide('#quarterField',repeat!=='quarterly');hide('#onceField',repeat!=='once');hide('#untilField',repeat==='once');hide('#startField',['nth','weekly','biweekly','once'].includes(repeat));f('deadline').hidden=f('hasDue').value!=='yes';f('once').required=repeat==='once';}
 f('repeat').onchange=formVisibility;form.querySelectorAll('[name=hasDue]').forEach(x=>x.onchange=formVisibility);
-function openEditor(id=null,onDate=null){editId=id;const r=id?state.rules.find(r=>r.id===id):{title:'',repeat:onDate?'once':'monthly',start:'1',hasDue:false,deadline:'same',miss:'carry',holiday:'previous',note:'',nths:[1],weekday:1,annualMonth:1,qStart:1,once:onDate||today(),until:''};form.reset();for(const n of ['title','repeat','start','deadline','miss','holiday','note','weekday','annualMonth','qStart','once','until'])if(f(n)&&r[n]!==undefined&&r[n]!==null)f(n).value=r[n];f('hasDue').value=r.hasDue?'yes':'no';f('nthChoice').value=(r.nths||[1]).join(',');$('#editorTitle').textContent=id?'업무 수정':'업무 추가';$('#editHint').textContent=id?'이번 달 미완료와 이후 일정에 적용합니다. 완료·미실시·지난달 기록은 유지합니다.':'새 업무는 오늘부터 시작합니다. 날짜를 눌러 추가한 일회성 업무는 선택한 날짜에 기록합니다.';formVisibility();$('#editor').showModal();}
+function openEditor(id=null,onDate=null){if(id&&state.rules.find(x=>x.id===id)?.deleted){toast('삭제된 업무라 수정할 수 없습니다.');return;}editId=id;const r=id?state.rules.find(r=>r.id===id):{title:'',repeat:onDate?'once':'monthly',start:'1',hasDue:false,deadline:'same',miss:'carry',holiday:'previous',note:'',nths:[1],weekday:1,annualMonth:1,qStart:1,once:onDate||today(),until:''};form.reset();for(const n of ['title','repeat','start','deadline','miss','holiday','note','weekday','annualMonth','qStart','once','until'])if(f(n)&&r[n]!==undefined&&r[n]!==null)f(n).value=r[n];f('hasDue').value=r.hasDue?'yes':'no';f('nthChoice').value=(r.nths||[1]).join(',');$('#editorTitle').textContent=id?'업무 수정':'업무 추가';$('#editHint').textContent=id?'이번 달 미완료와 이후 일정에 적용합니다. 완료·미실시·지난달 기록은 유지합니다.':'새 업무는 오늘부터 시작합니다. 날짜를 눌러 추가한 일회성 업무는 선택한 날짜에 기록합니다.';formVisibility();$('#editor').showModal();}
 $('#add').onclick=()=>openEditor();$('#manageAdd').onclick=()=>openEditor();
 form.onsubmit=e=>{e.preventDefault();if(notReady())return;const r={id:editId||uid(),title:f('title').value.trim(),repeat:f('repeat').value,start:f('start').value,hasDue:f('hasDue').value==='yes',deadline:f('deadline').value,miss:f('miss').value,holiday:f('holiday').value,note:f('note').value.trim(),nths:f('nthChoice').value.split(',').map(Number),weekday:+f('weekday').value,annualMonth:+f('annualMonth').value,qStart:+(f('qStart')?.value)||1,once:f('once').value,until:f('until')?.value||null,active:true,from:today(),updated:Date.now()};if(!r.title)return;if(r.until&&r.repeat!=='once'&&r.until<r.from){toast('반복 종료일은 오늘 이후로 정해 주세요.');return;}if(r.repeat==='once'){r.from=r.once;if(r.hasDue&&r.deadline!=='same'&&r.deadline!=='last'&&+r.deadline<+r.once.slice(8)){toast('마감일은 시작일 이후로 정해 주세요.');return;}}if(['monthly','quarterly','yearly'].includes(r.repeat)&&r.hasDue&&r.deadline!=='same'&&r.deadline!=='last'&&(r.start==='last'||+r.deadline<+r.start)){toast('마감일은 시작일 이후로 정해 주세요.');return;}
 if(editId){const old=state.rules.find(x=>x.id===editId);r.from=old.from;r.active=old.active;if(r.repeat!=='once'){const cm=month(today()),monthlyType=['monthly','quarterly','yearly'].includes(r.repeat);const handled=Object.values(state.items).some(o=>o.ruleId===editId&&!o.deleted&&(o.done||o.movedTo)&&month(o.original)===cm);r.since=monthlyType?(handled?nextMonthStart(cm):cm+'-01'):today();}state.rules=state.rules.map(x=>x.id===editId?r:x);regen(o=>o.ruleId===editId&&!o.done&&!o.movedTo&&!o.deleted&&!['missed','excluded'].includes(status(o))&&(r.repeat==='once'?month(o.original)>=month(today()):o.original>=r.since));}
 else state.rules.push(r);sync(state);if(r.repeat==='once'&&!state.items[r.id+':'+r.once])for(const o of occurrences(r,month(r.once),state.holidays))state.items[o.id]=o;$('#editor').close();render();renderRules();toast('업무를 저장했습니다.');};
 const repeatNames={monthly:'매월',quarterly:'분기(3개월마다)',yearly:'매년',nth:'매월 특정 요일',weekly:'매주 특정 요일',biweekly:'격주 특정 요일',once:'일회성'};
 function ruleSummary(r){let when=r.repeat==='once'?r.once:r.repeat==='nth'?r.nths.join('·')+'번째 '+'일월화수목금토'[r.weekday]+'요일':(r.repeat==='weekly'||r.repeat==='biweekly')?(r.repeat==='biweekly'?'격주 ':'매주 ')+'일월화수목금토'[r.weekday]+'요일':r.repeat==='quarterly'?(q=>[q,q+3,q+6,q+9].join('·')+'월 ')(+(r.qStart||1))+(r.start==='last'?'말일':r.start+'일'):(r.repeat==='yearly'?r.annualMonth+'월 ':'')+(r.start==='last'?'말일':r.start+'일');const base=`${repeatNames[r.repeat]} · ${when} · ${r.hasDue?'마감 '+(r.deadline==='last'?'말일':r.deadline==='same'?'당일':r.deadline+'일'):'마감 없음'}`;return r.until?base+` · ~${shortDate(r.until)}까지`:base;}
-function renderRules(){const list=$('#rules');list.replaceChildren();for(const r of state.rules){const row=el('div','rule'+(!r.active?' inactive':''));const info=el('div','ruleinfo');info.append(el('strong','',r.title),el('p','',ruleSummary(r)));row.append(info);let b=el('button','','수정');b.onclick=()=>openEditor(r.id);row.append(b);b=el('button','',r.active?'중지':'다시 사용');b.onclick=async()=>{if(notReady())return;if(r.active&&!await confirmAction('앞으로 반복되는 일정을 중지할까요?\n이미 지난 업무와 완료 기록은 남습니다.'))return;r.active=!r.active;r.updated=Date.now();if(!r.active){regen(o=>o.ruleId===r.id&&plannedDate(o)>today()&&!o.done&&!o.movedTo&&!o.deleted);}else{r.since=today();const now=Date.now();const tomb=Object.entries(state.items).filter(([,o])=>o.ruleId===r.id&&o.deleted&&o.auto&&o.scheduled>=today()).map(([id])=>id);for(const id of tomb)delete state.items[id];sync(state);for(const id of tomb)if(state.items[id])state.items[id].updated=now;}render();renderRules();};row.append(b);list.append(row);}renderHolidayList();}
+function renderRules(){const list=$('#rules');list.replaceChildren();for(const r of state.rules){if(r.deleted)continue;const row=el('div','rule'+(!r.active?' inactive':''));const info=el('div','ruleinfo');info.append(el('strong','',r.title),el('p','',ruleSummary(r)));row.append(info);let b=el('button','','수정');b.onclick=()=>openEditor(r.id);row.append(b);b=el('button','',r.active?'중지':'다시 사용');b.onclick=async()=>{if(notReady())return;if(r.active&&!await confirmAction('앞으로 반복되는 일정을 중지할까요?\n이미 지난 업무와 완료 기록은 남습니다.'))return;r.active=!r.active;r.updated=Date.now();if(!r.active){regen(o=>o.ruleId===r.id&&plannedDate(o)>today()&&!o.done&&!o.movedTo&&!o.deleted);}else{r.since=today();const now=Date.now();const tomb=Object.entries(state.items).filter(([,o])=>o.ruleId===r.id&&o.deleted&&o.auto&&o.scheduled>=today()).map(([id])=>id);for(const id of tomb)delete state.items[id];sync(state);for(const id of tomb)if(state.items[id])state.items[id].updated=now;}render();renderRules();};row.append(b);b=el('button','danger','삭제');b.onclick=()=>deleteRule(r);row.append(b);list.append(row);}renderHolidayList();}
 $('#manage').onclick=()=>{renderRules();$('#management').showModal();};
 $('#summary').onclick=()=>{renderSummary();$('#summaryDialog').showModal();};
 $('#daySummary').onclick=()=>{view=month(today());render();renderSummary();$('#summaryDialog').showModal();};
@@ -152,11 +158,11 @@ function renderSummary(){
   box.append(sec);}
  if(!total)box.append(el('div','emptyday','이 달에 표시할 업무가 없습니다.'));
 }
-function openDetail(o){o=state.items[o.id]||o;selected=o;$('#detailTitle').textContent=o.title;const box=$('#detailBody');box.replaceChildren();const st=status(o);const labels={open:'미완료',late:'미완료 · 마감 경과',done:'완료',missed:'미실시',excluded:'휴일 제외'};for(const [a,b]of [['원래 예정일',o.scheduled],...(o.movedTo?[['변경한 예정일',o.movedTo]]:[]),['마감일',o.due||'없음'],['상태',labels[st]],...(o.done?[['완료일',o.done]]:[])]){const row=el('div','detailrow');row.append(el('span','',a),el('span','',b));box.append(row);}const label=el('label','','메모');const area=el('textarea');area.rows=3;area.maxLength=2000;area.value=o.note;area.placeholder='업무 메모';area.onchange=()=>{const v=keep(o);v.note=area.value;v.updated=Date.now();save();};label.append(area);box.append(label);$('#toggleItem').textContent=o.done?'완료 취소':'오늘 완료';$('#toggleItem').hidden=st==='excluded';$('#detail').showModal();}
+function openDetail(o){o=state.items[o.id]||o;selected=o;$('#detailTitle').textContent=o.title;const box=$('#detailBody');box.replaceChildren();const st=status(o);const labels={open:'미완료',late:'미완료 · 마감 경과',done:'완료',missed:'미실시',excluded:'휴일 제외'};for(const [a,b]of [['원래 예정일',o.scheduled],...(o.movedTo?[['변경한 예정일',o.movedTo]]:[]),['마감일',o.due||'없음'],['상태',labels[st]],...(o.done?[['완료일',o.done]]:[])]){const row=el('div','detailrow');row.append(el('span','',a),el('span','',b));box.append(row);}const label=el('label','','메모');const area=el('textarea');area.rows=3;area.maxLength=2000;area.value=o.note;area.placeholder='업무 메모';area.onchange=()=>{const v=keep(o);v.note=area.value;v.updated=Date.now();save();};label.append(area);box.append(label);$('#editRule').hidden=!!state.rules.find(x=>x.id===o.ruleId)?.deleted;$('#toggleItem').textContent=o.done?'완료 취소':'오늘 완료';$('#toggleItem').hidden=st==='excluded';$('#detail').showModal();}
 $('#moveItem').onclick=()=>{const o=selected;$('#detail').close();openMove(o,o.done||plannedDate(o));};
 $('#toggleItem').onclick=()=>{toggle(selected);$('#detail').close();};$('#editRule').onclick=()=>{const id=selected.ruleId;$('#detail').close();openEditor(id);};$('#removeItem').onclick=async()=>{if(await confirmAction('이번 회차의 업무를 삭제할까요? 다음 반복 일정은 유지됩니다.')){{const v=keep(selected);v.deleted=true;v.updated=Date.now();}$('#detail').close();render();}};
 async function download(){if(window.desktop){try{if(await window.desktop.backup(JSON.stringify(state,null,2)))toast('백업 파일을 저장했습니다.');}catch{toast('백업 저장에 실패했습니다. 저장 위치를 확인해 주세요.');}return;}const blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'});const a=el('a');a.href=URL.createObjectURL(blob);a.download='분소업무_백업_'+today()+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);toast('백업 파일을 저장했습니다.');}
-$('#backup').onclick=download;$('#restore').onclick=()=>$('#file').click();$('#file').onchange=async e=>{const file=e.target.files[0];if(!file)return;try{if(file.size>15000000)throw Error();const s=JSON.parse(await file.text());if(!validState(s))throw Error();if(!await confirmAction('백업 자료로 현재 일정을 교체할까요?\n현재 자료가 필요하면 먼저 백업 저장을 해 주세요.'))return;state=migrate({...s,epoch:uid()});readFailure=false;if(cloudEnabled&&authUser){cloudReady=true;forceNext=true;}$('#notice').textContent='';render();renderRules();toast('백업을 불러왔습니다. 모든 기기에 이 자료로 교체됩니다.');}catch{toast('올바른 분소 업무 백업 파일이 아닙니다. 현재 자료는 유지됩니다.');}finally{e.target.value='';}};
+$('#backup').onclick=download;$('#restore').onclick=()=>$('#file').click();$('#file').onchange=async e=>{const file=e.target.files[0];if(!file)return;try{if(file.size>15000000)throw Error();const s=JSON.parse(await file.text());if(!validState(s))throw Error();if(!await confirmAction('백업 자료로 현재 일정을 교체할까요?\n현재 자료가 필요하면 먼저 백업 저장을 해 주세요.'))return;state={...s,epoch:uid()};readFailure=false;if(cloudEnabled&&authUser){cloudReady=true;forceNext=true;}$('#notice').textContent='';render();renderRules();toast('백업을 불러왔습니다. 모든 기기에 이 자료로 교체됩니다.');}catch{toast('올바른 분소 업무 백업 파일이 아닙니다. 현재 자료는 유지됩니다.');}finally{e.target.value='';}};
 function renderHolidayList(){const box=$('#holidayList');box.replaceChildren();for(const [d,n]of Object.entries(state.holidays).sort()){const row=el('div','holidayrow',d+' · '+(n||'평일로 변경'));const b=el('button','','설정 해제');b.onclick=()=>{if(notReady())return;delete state.holidays[d];stampHoliday(d);refreshHolidays();};row.append(b);box.append(row);}}
 function stampHoliday(d){(state.holidayStamp||(state.holidayStamp={}))[d]=Date.now();}
 function refreshHolidays(){regen(o=>!o.done&&!o.deleted&&!o.movedTo&&o.scheduled>=today());render();renderRules();toast('휴일 설정을 반영했습니다.');}
@@ -225,8 +231,7 @@ function betterRule(x,y){const ex=x.once!==undefined,ey=y.once!==undefined;if(ex
 // 중복 정리: "다른 기기의 빈 기본목록 복사본"(사용자가 수정한 적 없는 것)만 합친다. 직접 만들거나 수정한 업무끼리는 절대 합치지 않음.
 function dedupeState(s){
  if(!s||!Array.isArray(s.rules))return s;
- const groups=new Map();for(const r of s.rules){const k=ruleSig(r);groups.has(k)?groups.get(k).push(r):groups.set(k,[r]);}
- const keep=new Set(),remap={};
+ const groups=new Map(),keep=new Set(),remap={};for(const r of s.rules){if(r.deleted){keep.add(r.id);continue;}const k=ruleSig(r);groups.has(k)?groups.get(k).push(r):groups.set(k,[r]);}
  for(const g of groups.values()){
   if(g.length<2){keep.add(g[0].id);continue;}
   const mine=g.filter(r=>r.once!==undefined),copies=g.filter(r=>r.once===undefined);
@@ -245,16 +250,6 @@ function mergeState(p,o){if(!p)return dedupeState(o);if(!o)return dedupeState(p)
  if(p.epoch||o.epoch)out.epoch=p.epoch||o.epoch;
  const mg=[...new Set([...(p.migrations||[]),...(o.migrations||[])])];if(mg.length)out.migrations=mg;
  return dedupeState(out);}
-// 기존 자료 고치기(1회): 연간점검·4년점검 보고가 "매월"로 잘못 들어간 것을 "매년 1월 1일"로. 잘못 생긴 미완료 회차는 지움(완료 기록은 보존)
-function migrate(s){
- if(!s||!Array.isArray(s.rules))return s;
- const mg=s.migrations||[];if(mg.includes('yearly-0.5'))return s;
- const now=Date.now(),fixed=new Set();
- const rules=s.rules.map(r=>{if(['연간점검 보고','4년점검 보고'].includes(String(r.title).trim())&&r.repeat==='monthly'){fixed.add(r.id);return {...r,repeat:'yearly',annualMonth:1,start:'1',holiday:'keep',updated:now};}return r;});
- const items={...(s.items||{})};
- if(fixed.size)for(const [id,o] of Object.entries(items))if(fixed.has(o.ruleId)&&!o.done&&!o.deleted&&o.original.slice(5)!=='01-01')items[id]={...o,deleted:true,updated:now};
- return {...s,rules,items,migrations:[...mg,'yearly-0.5']};
-}
 async function fetchRemote(){
  const {data,error}=await sb.from('calendar_state').select('data').eq('user_id',authUser.id).maybeSingle();
  if(error)throw new Error('network: '+(error.message||''));
@@ -294,12 +289,12 @@ async function cloudLoad(){
  let s;
  if(remote&&cached&&(cached.epoch||'')===(remote.epoch||''))s=mergeState(remote,cached);  // 클라우드 기준 + 이 기기에서 손댄 것
  else s=dedupeState(remote||cached||freshState());
- s=migrate(s);adopt(s);cloudReady=true;
+ adopt(s);cloudReady=true;
  if(!remote||canon(remote)!==lastSyncJson){try{await upsertState(s);}catch{lastSyncJson=remote?canon(remote):null;}}
 }
 function applyRemote(remote){                            // 다른 기기 변경 반영: 클라우드 기준 + 이 기기에서 손댄 것
  if((remote.epoch||'')!==(state.epoch||'')){adopt(remote);render();return true;}  // 다른 기기에서 백업 불러오기 → 통째로 따름
- const merged=migrate(mergeState(remote,state));const c=canon(merged);
+ const merged=mergeState(remote,state);const c=canon(merged);
  if(c===lastSyncJson)return false;
  state=merged;lastSyncJson=c;local.setItem(STORAGE,JSON.stringify(merged));render();
  if(canon(remote)!==c)queueCloudSave(JSON.stringify(merged));
@@ -336,7 +331,7 @@ async function afterLogin(){
  catch(e){
   const bad=/invalid/.test(e.message);
   let cached=null;const raw=local.getItem(STORAGE);try{if(raw){const c=JSON.parse(raw);if(validState(c))cached=c;}}catch{}
-  if(cached){adopt(migrate(cached));cloudReady=true;$('#saved').textContent=bad?'⚠ 클라우드 자료 형식 오류 · 이 기기 자료로 표시':'⚠ 클라우드 연결 실패 · 이 기기 자료로 표시(연결되면 자동 동기화)';}
+  if(cached){adopt(cached);cloudReady=true;$('#saved').textContent=bad?'⚠ 클라우드 자료 형식 오류 · 이 기기 자료로 표시':'⚠ 클라우드 연결 실패 · 이 기기 자료로 표시(연결되면 자동 동기화)';}
   else{hideLogin();startApp();$('#notice').textContent=bad?'클라우드 자료를 읽을 수 없습니다(형식 오류). 관리 → 백업 불러오기로 복구하세요.':'클라우드에 연결하지 못했습니다. 5초 후 다시 시도합니다…';
    if(!bad)loadRetry=setTimeout(afterLogin,5000);return;}
  }
@@ -370,8 +365,8 @@ async function boot(){
   if(isDesktop)try{window.desktop.setMode('day');}catch{}
   showLogin();return;
  }
- if(isDesktop){try{const raw=storage.getItem(STORAGE);if(raw){const s=JSON.parse(raw);if(!validState(s))throw Error('invalid');state=s;}}catch{readFailure=true;}if(!readFailure)state=migrate(state);render();return;}
- try{const raw=local.getItem(STORAGE);if(raw){const s=JSON.parse(raw);if(!validState(s))throw Error('invalid');state=s;}}catch{readFailure=true;}if(!readFailure)state=migrate(state);startApp();
+ if(isDesktop){try{const raw=storage.getItem(STORAGE);if(raw){const s=JSON.parse(raw);if(!validState(s))throw Error('invalid');state=s;}}catch{readFailure=true;}render();return;}
+ try{const raw=local.getItem(STORAGE);if(raw){const s=JSON.parse(raw);if(!validState(s))throw Error('invalid');state=s;}}catch{readFailure=true;}startApp();
 }
 boot();
 if(document.modelContext?.registerTool){try{Promise.resolve(document.modelContext.registerTool({name:'list_calendar_tasks',title:'달력 업무 조회',description:'현재 표시된 달의 업무와 상태를 조회합니다.',inputSchema:{type:'object',properties:{},additionalProperties:false},annotations:{readOnlyHint:true},execute(input){if(!input||typeof input!=='object'||Object.keys(input).length)throw Error('입력은 빈 객체여야 합니다.');return {month:view,tasks:allVisible().map(o=>({id:o.id,title:o.title,date:displayDate(o),status:status(o)}))};}})).catch(()=>{});}catch{}}

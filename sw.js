@@ -1,5 +1,5 @@
 // 분소 업무 달력 — 서비스워커 (앱 셸 캐시, 오프라인 로딩용)
-const CACHE = 'bunso-cal-v2';
+const CACHE = 'bunso-cal-v3';
 const SHELL = [
   './index.html', './app.mjs', './engine.mjs', './density.mjs', './holidays.js',
   './style.css', './desktop.css', './web.css', './config.js', './boot.js', './supabase.js',
