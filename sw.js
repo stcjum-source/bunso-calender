@@ -1,5 +1,5 @@
 // 분소 업무 달력 — 서비스워커 (앱 셸 캐시, 오프라인 로딩용)
-const CACHE = 'bunso-cal-v1';
+const CACHE = 'bunso-cal-v2';
 const SHELL = [
   './index.html', './app.mjs', './engine.mjs', './density.mjs', './holidays.js',
   './style.css', './desktop.css', './web.css', './config.js', './boot.js', './supabase.js',
@@ -18,10 +18,11 @@ self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
   // 앱 셸: 네트워크 우선, 실패 시 캐시 (업데이트 반영 + 오프라인 대비)
   e.respondWith(
-    fetch(e.request).then(res => {
+    // 항상 서버에 새 버전이 있는지 확인(no-cache) → GitHub 10분 캐시 때문에 옛 파일과 섞이는 문제 방지
+    fetch(new Request(e.request.url, { cache: 'no-cache', credentials: 'same-origin' })).then(res => {
       const copy = res.clone();
       caches.open(CACHE).then(c => c.put(e.request, copy)).catch(() => {});
       return res;
-    }).catch(() => caches.match(e.request).then(m => m || caches.match('./index.html')))
+    }).catch(() => caches.match(e.request, { ignoreSearch: true }).then(m => m || caches.match('./index.html')))
   );
 });
