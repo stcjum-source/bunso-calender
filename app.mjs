@@ -1,4 +1,4 @@
-import {key,date,today,month,uid,holiday,defaults,sync,projected,status,displayDate,occurrences,validState,plannedDate,calendarEntries,setCompletion,moveOccurrence} from './engine.mjs?v=0.5.1';
+import {key,date,today,month,uid,holiday,defaults,sync,projected,status,displayDate,occurrences,validState,plannedDate,calendarEntries,setCompletion,moveOccurrence} from './engine.mjs?v=0.5.2';
 const $=s=>document.querySelector(s), el=(tag,cls,text)=>{const e=document.createElement(tag);if(cls)e.className=cls;if(text!==undefined)e.textContent=text;return e;};
 const CFG=window.BUNSO_CONFIG||{};
 const isDesktop=!!window.desktop;
@@ -83,6 +83,7 @@ function quickMove(o,target){
 }
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){pickedItem=null;updatePick();}});
 function render(){
+ if(cloudEnabled&&!authUser){$('#calendar').replaceChildren();$('#dayList').replaceChildren();showLogin();return;}  // 로그인 안 된 상태로 멈춰 있지 않게
  if(cloudEnabled&&!cloudReady){$('#calendar').replaceChildren();$('#dayList').replaceChildren(el('div','emptyday','클라우드 자료를 불러오는 중입니다…'));return;}
  sync(state);save();const [y,m]=view.split('-').map(Number);$('#monthTitle').textContent=`${y}년 ${m}월`;
  const cal=$('#calendar');cal.replaceChildren();const first=new Date(y,m-1,1),start=new Date(y,m-1,1-first.getDay());
@@ -251,13 +252,13 @@ function mergeState(p,o){if(!p)return dedupeState(o);if(!o)return dedupeState(p)
  const mg=[...new Set([...(p.migrations||[]),...(o.migrations||[])])];if(mg.length)out.migrations=mg;
  return dedupeState(out);}
 async function fetchRemote(){
- const {data,error}=await sb.from('calendar_state').select('data').eq('user_id',authUser.id).maybeSingle();
+ const {data,error}=await sb.from('calendar_state').select('data').eq('user_id',authUser.id).abortSignal(AbortSignal.timeout(15000)).maybeSingle();  // 응답 없으면 15초 후 실패 처리 → 재시도
  if(error)throw new Error('network: '+(error.message||''));
  if(!data||data.data==null)return null;               // 진짜로 자료 없음(새 계정)
  if(!validState(data.data))throw new Error('invalid'); // 형식 오류 → 절대 덮어쓰지 않음
  return data.data;
 }
-async function upsertState(data){const {error}=await sb.from('calendar_state').upsert({user_id:authUser.id,data,updated_at:new Date().toISOString()});if(error)throw new Error('network: '+(error.message||''));}
+async function upsertState(data){const {error}=await sb.from('calendar_state').upsert({user_id:authUser.id,data,updated_at:new Date().toISOString()}).abortSignal(AbortSignal.timeout(15000));if(error)throw new Error('network: '+(error.message||''));}
 function adopt(s){state=s;lastSyncJson=canon(s);local.setItem(STORAGE,JSON.stringify(s));}
 let saveTimer=null,retryTimer=null,pendingJson=null,saving=false,forceNext=false;
 function queueCloudSave(json){pendingJson=json;$('#saved').textContent='저장 중…';clearTimeout(saveTimer);saveTimer=setTimeout(flushCloud,400);}
@@ -313,7 +314,20 @@ async function doLogout(auto=false){
  if(unsynced&&!auto&&!await confirmAction('아직 클라우드에 저장되지 않은 변경이 있습니다(인터넷 연결 확인).\n이 기기에 임시 보관했다가 다음 로그인 때 올립니다. 잠글까요?'))return;
  if(!unsynced)try{localStorage.removeItem(STORAGE);}catch{}   // 공용 PC에 달력 자료를 남기지 않음
  try{await sb.auth.signOut();}catch{}
- authUser=null;lastSyncJson=null;cloudReady=false;location.reload();
+ authUser=null;lastSyncJson=null;cloudReady=false;
+ lockInPlace();   // 새로고침(location.reload)에 의존하지 않음 — 분소PC 프로그램은 새로고침이 차단되어 '불러오는 중'에 멈췄음
+}
+function lockInPlace(){
+ clearTimeout(lockTimer);clearTimeout(loadRetry);clearTimeout(saveTimer);clearTimeout(retryTimer);
+ pendingJson=null;forceNext=false;                      // 못 올린 변경은 이 기기 임시 보관본에 남아 다음 로그인 때 합쳐짐
+ try{if(realtimeSub)sb.removeChannel(realtimeSub);}catch{}realtimeSub=null;
+ document.querySelectorAll('dialog[open]').forEach(d=>{try{d.close();}catch{}});  // 열린 창이 로그인 화면 위에 남지 않게
+ state=freshState();                                    // 화면·메모리에서 달력 자료 제거
+ $('#calendar').replaceChildren();$('#dayList').replaceChildren();$('#rules')?.replaceChildren();$('#summaryBody')?.replaceChildren();
+ $('#notice').textContent='';$('#saved').textContent='';
+ $('#loginPw').value='';$('#loginMsg').textContent='';
+ if(isDesktop)try{window.desktop.setMode('day');}catch{}
+ showLogin();
 }
 let realtimeSub=null;
 function subscribeRealtime(){
@@ -325,17 +339,22 @@ function subscribeRealtime(){
   }).subscribe();}catch(e){}
 }
 let loadRetry=null;
+let loading=false;
+const timed=(p,ms)=>Promise.race([p,new Promise((_,j)=>setTimeout(()=>j(Error('network: timeout')),ms))]);  // 응답 없는 통신에 묶여 멈추지 않게
 async function afterLogin(){
- clearTimeout(loadRetry);
- try{await cloudLoad();$('#notice').textContent='';}
- catch(e){
-  const bad=/invalid/.test(e.message);
-  let cached=null;const raw=local.getItem(STORAGE);try{if(raw){const c=JSON.parse(raw);if(validState(c))cached=c;}}catch{}
-  if(cached){adopt(cached);cloudReady=true;$('#saved').textContent=bad?'⚠ 클라우드 자료 형식 오류 · 이 기기 자료로 표시':'⚠ 클라우드 연결 실패 · 이 기기 자료로 표시(연결되면 자동 동기화)';}
-  else{hideLogin();startApp();$('#notice').textContent=bad?'클라우드 자료를 읽을 수 없습니다(형식 오류). 관리 → 백업 불러오기로 복구하세요.':'클라우드에 연결하지 못했습니다. 5초 후 다시 시도합니다…';
-   if(!bad)loadRetry=setTimeout(afterLogin,5000);return;}
- }
- hideLogin();startApp();resetLockTimer();subscribeRealtime();
+ clearTimeout(loadRetry);if(loading)return;loading=true;
+ try{
+  try{await timed(cloudLoad(),25000);$('#notice').textContent='';}
+  catch(e){if(!cloudReady){                           // (시간 초과 직후 늦게 끝났으면 정상 진행)
+   const bad=/invalid/.test(e.message);
+   let cached=null;const raw=local.getItem(STORAGE);try{if(raw){const c=JSON.parse(raw);if(validState(c))cached=c;}}catch{}
+   if(cached){adopt(cached);cloudReady=true;$('#saved').textContent=bad?'⚠ 클라우드 자료 형식 오류 · 이 기기 자료로 표시':'⚠ 클라우드 연결 실패 · 이 기기 자료로 표시(연결되면 자동 동기화)';}
+   else{hideLogin();startApp();$('#notice').textContent=bad?'클라우드 자료를 읽을 수 없습니다(형식 오류). 관리 → 백업 불러오기로 복구하세요.':'클라우드에 연결하지 못했습니다. 5초 후 다시 시도합니다…';
+    if(!bad)loadRetry=setTimeout(afterLogin,5000);return;}
+  }}
+  if(!authUser)return;                                  // 불러오는 사이 잠긴 경우
+  hideLogin();startApp();resetLockTimer();subscribeRealtime();
+ }finally{loading=false;}
 }
 function startApp(){if(!isDesktop)document.body.dataset.mode='month';render();}
 $('#loginForm')?.addEventListener('submit',async e=>{
@@ -357,10 +376,11 @@ if(cloudEnabled&&AUTO)['pointerdown','keydown'].forEach(ev=>document.addEventLis
 document.addEventListener('visibilitychange',()=>{if(!cloudEnabled||!authUser)return;if(document.hidden)flushNow();else{resetLockTimer();refreshFromCloud();}});
 window.addEventListener('pagehide',()=>{if(cloudEnabled&&authUser)flushNow();});
 window.addEventListener('online',()=>{if(cloudEnabled&&authUser){if(pendingJson!=null)flushCloud();else refreshFromCloud();}});
-setInterval(()=>{if(cloudEnabled&&authUser&&cloudReady&&!document.hidden)refreshFromCloud();},60000);  // 실시간 알림이 안 와도 1분마다 확인
+setInterval(()=>{if(cloudEnabled&&authUser&&cloudReady&&!document.hidden)refreshFromCloud();},60000);
+setInterval(()=>{if(cloudEnabled&&authUser&&!cloudReady&&!loading)afterLogin();},20000);  // 안전장치: 불러오기가 끝나지 않은 채 남아 있으면 다시 시도  // 실시간 알림이 안 와도 1분마다 확인
 async function boot(){
  if(cloudEnabled){
-  let session=null;try{const r=await sb.auth.getSession();session=r.data.session;}catch{}
+  let session=null;try{const r=await Promise.race([sb.auth.getSession(),new Promise((_,j)=>setTimeout(()=>j(Error('timeout')),15000))]);session=r.data.session;}catch{}
   if(session){authUser=session.user;await afterLogin();return;}
   if(isDesktop)try{window.desktop.setMode('day');}catch{}
   showLogin();return;
