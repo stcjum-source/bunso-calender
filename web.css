@@ -25,8 +25,10 @@ body.cloud #lockBtn { display: inline-flex; align-items: center; gap: 4px; borde
 #login {
   position: fixed; inset: 0; z-index: 10000;
   background: linear-gradient(160deg, #2563eb, #1e40af);
-  display: flex; align-items: center; justify-content: center; padding: 24px;
+  display: flex; padding: 24px; overflow: auto;
 }
+#login .loginbox { margin: auto; }  /* 창이 작아도 잘리지 않고 스크롤 */
+
 #login .loginbox {
   width: 100%; max-width: 360px; background: #fff; border-radius: 18px;
   padding: 28px 24px; box-shadow: 0 20px 60px rgba(0,0,0,.3);
@@ -41,3 +43,14 @@ body.cloud #lockBtn { display: inline-flex; align-items: center; gap: 4px; borde
 #loginMsg { text-align: center; min-height: 18px; margin: 12px 0 0; font-size: 13px; color: #dc2626; }
 #loginMsg.ok { color: #059669; }
 body.locked { overflow: hidden; }
+/* 작은 창(분소PC 위젯)에서 로그인 화면 압축 */
+@media (max-height: 460px) {
+  #login { padding: 10px; }
+  #login .loginbox { padding: 16px 16px; border-radius: 12px; }
+  #login .loginlogo { width: 30px; height: 30px; margin-bottom: 4px; }
+  #login h1 { font-size: 16px; }
+  #login p.sub { margin-bottom: 10px; }
+  #login label { margin-bottom: 8px; }
+  #login input { padding: 8px 10px; }
+  #login button.primary { padding: 9px; }
+}

@@ -1,4 +1,4 @@
-import {key,date,today,month,uid,holiday,defaults,sync,projected,status,displayDate,occurrences,validState,plannedDate,calendarEntries,setCompletion,moveOccurrence} from './engine.mjs?v=0.5.2';
+import {key,date,today,month,uid,holiday,defaults,sync,projected,status,displayDate,occurrences,validState,plannedDate,calendarEntries,setCompletion,moveOccurrence} from './engine.mjs?v=0.5.3';
 const $=s=>document.querySelector(s), el=(tag,cls,text)=>{const e=document.createElement(tag);if(cls)e.className=cls;if(text!==undefined)e.textContent=text;return e;};
 const CFG=window.BUNSO_CONFIG||{};
 const isDesktop=!!window.desktop;
